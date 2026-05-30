@@ -30,9 +30,15 @@ do {
 		}
 		
 		fputs("Processing \(path)...\n", stderr)
-		
-		let originalSize = image.size
-		
+
+		// NSImage.size is in points and depends on DPI metadata; we want pixels.
+		guard let rep = image.representations.first else {
+			fputs("Failed to read image representation: \(path)\n", stderr)
+			continue
+		}
+		let originalSize = NSSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+		fputs("Pixel size: \(rep.pixelsWide)x\(rep.pixelsHigh) (NSImage.size was \(image.size))\n", stderr)
+
 		let semaphore = DispatchSemaphore(value: 0)
 		var resultCG: CGImage?
 		
@@ -41,14 +47,14 @@ do {
 			resultCG = cgImage
 			semaphore.signal()
 		}
-		
+
 		semaphore.wait()
-		
+
 		guard let outCGImage = resultCG else {
 			fputs("Depth estimation failed for \(path)\n", stderr)
 			continue
 		}
-		
+
 		let outURL = outputURL(for: url)
 		if savePNG(cgImage: outCGImage, to: outURL, size: originalSize) {
 			fputs("Saved \(outURL.path)\n", stderr)
@@ -73,11 +79,11 @@ func outputURL(for input: URL) -> URL {
 func savePNG(cgImage: CGImage, to url: URL, size: NSSize) -> Bool {
 	let rep = NSBitmapImageRep(cgImage: cgImage)
 	rep.size = size
-	
+
 	guard let data = rep.representation(using: .png, properties: [:]) else {
 		return false
 	}
-	
+
 	do {
 		try data.write(to: url)
 		return true
