@@ -175,6 +175,18 @@ Results on 12 pairs spread across the library (2026-09-10, M4 Pro; parallax fitt
 
 auto picks: bgpull x11, stretch x1
 
+The optional `iw3` backend (nunif's `mlbw_l2`, fed our depth) on 4 of those pairs, right eye only,
+against `bgpull` on the same pairs:
+
+| backend | PSNR | SSIM | LPIPS | hole PSNR | hole MAE | best-hole wins | mean s |
+|---|---|---|---|---|---|---|---|
+| bgpull | 21.73 | 0.6472 | 0.1183 | 16.51 | 28.35 | 4/4 | 1.9 |
+| iw3 | 19.06 | 0.5746 | 0.2416 | 14.75 | 34.14 | 0/4 | 45.8 |
+
+iw3's `--convergence` is bounded to the depth range, so the out-of-range zero planes of real pairs are
+emulated by clamping and translating its eyes back by the constant residual; after that its eyes sit
+within 1 px of ours. It is not a default candidate: it loses on every pair and runs 6-90 s per image.
+
 Reading the numbers: whole-frame PSNR/SSIM/LPIPS are dominated by where the mono depth disagrees
 with the real geometry (Depth Pro's relative depth is not affine in true disparity everywhere, and
 the pairs have residual vertical misalignment), so they barely move between backends. The
@@ -208,8 +220,10 @@ when it has to run, is separate (and its first run loads the Core ML model).
 * **Very wide holes** (> ~60 px, i.e. big parallax on a close subject): every backend invents
   content; `lama` looks plausible but smooth, the others streak or tile. Reduce `--parallax` or use
   `--eyes right` so at least one eye is the untouched original.
-* `iw3`'s divergence/convergence semantics are close to ours but not identical (it applies its own
-  edge dilation and works in half-width units); treat it as a reference, not a drop-in candidate.
+* `iw3` is a whole-frame backend: with our depth injected (`divergence` = our parallax in % of
+  width, `convergence` = zero plane / 255) its eyes land within 0.2 px of ours, so its output is
+  directly comparable, but it always synthesizes both eyes (no `--eyes right`) and runs as a
+  subprocess that loads its side models each call (a few seconds per image).
 
 ## Layout
 

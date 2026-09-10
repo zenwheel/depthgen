@@ -51,7 +51,10 @@ class IW3(Backend):
                                 "mapper": "none", "skip_mapper": True, "skip_edge_dilation": False,
                                 "user_data": {"source": "depthgen"}}, f)
             divergence = parallax_px / w * 100.0
+            # iw3 bounds the convergence plane to the depth range; a zero plane outside 0..255 (normal for a
+            # parallel-camera baseline) is emulated by clamping here and translating the eyes afterwards
             convergence = float(np.clip(zero_plane / 255.0, 0.0, 1.0))
+            residual_px = parallax_px * (convergence * 255.0 - zero_plane) / 255.0  # our shift minus iw3's
             # full side-by-side is iw3's default output; --depth-model NULL keeps it from loading a depth
             # network since the export config supplies the depth
             cmd = [sys.executable, "-m", "iw3", "-i", os.path.join(tmp, "in", "iw3_export.yml"), "-o", os.path.join(tmp, "out"),
@@ -73,15 +76,31 @@ class IW3(Backend):
             sbs = np.asarray(Image.open(outs[0]).convert("RGB"))
             if sbs.shape[1] != 2 * w or sbs.shape[0] != h:
                 sbs = cv2.resize(sbs, (2 * w, h), interpolation=cv2.INTER_LINEAR)
-            return sbs[:, :w].copy(), sbs[:, w:].copy()
+            left, right = sbs[:, :w].copy(), sbs[:, w:].copy()
+            if abs(residual_px) > 0.05:
+                # per eye the shift is s/2, so iw3's right eye sits residual/2 px too far right and its left eye
+                # residual/2 px too far left; translate each back
+                left = self._translate(left, residual_px / 2.0)
+                right = self._translate(right, -residual_px / 2.0)
+            return left, right
+
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    @staticmethod
+    def _translate(img: np.ndarray, dx: float) -> np.ndarray:
+        m = np.float32([[1, 0, dx], [0, 1, 0]])
+        return cv2.warpAffine(img, m, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR,
+                              borderMode=cv2.BORDER_REPLICATE)
+
     def fill(self, warped, hole, depth, original, ctx: FillContext):
         cache = ctx.extra.setdefault("iw3_pair", {})
-        key = (id(original), round(ctx.parallax_px, 2), round(ctx.zero_plane, 2))
+        # iw3 always splits the divergence over both eyes; in right-only mode our right eye carries the
+        # whole shift, so ask iw3 for twice the range and use only its right eye
+        parallax = ctx.parallax_px * (2.0 if ctx.extra.get("eyes") == "right" else 1.0)
+        key = (id(original), round(parallax, 2), round(ctx.zero_plane, 2))
         if key not in cache:
             cache.clear()
-            cache[key] = self.synthesize_pair(original, ctx.depth_src, ctx.parallax_px, ctx.zero_plane)
+            cache[key] = self.synthesize_pair(original, ctx.depth_src, parallax, ctx.zero_plane)
         left, right = cache[key]
         return left if ctx.extra.get("eye") == "left" else right

@@ -106,7 +106,7 @@ def spatialize_image(rgb: np.ndarray, depth8: np.ndarray, opt: Options, models: 
         stats = hole_stats(geom, wp.rgb, (bl, br))
         strip = bg_strip(geom, 8)
         ctx = FillContext(geom=geom, shift=s, depth_src=depth, parallax_px=parallax_px, zero_plane=zero,
-                          device=opt.device, extra={"eye": name})
+                          device=opt.device, extra={"eye": name, "eyes": opt.eyes})
 
         if opt.infill != "auto":
             forced, cands, reason = opt.infill, [opt.infill], "forced"
