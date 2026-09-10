@@ -1,0 +1,161 @@
+"""spatialize_image(): depth -> disparity -> warp -> infill (auto-selected) -> aligned stereo pair."""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+
+import numpy as np
+
+from .depth import DepthConditioning, condition_depth, resolve_convergence, shift_field
+from .holes import analyze, bg_strip
+from .infill import DEFAULT_CANDIDATES, FillContext, available_backends, get_backend
+from .select import Scorer, hole_stats, plan
+from .warp import Warped, border_widths, forward_warp
+
+
+@dataclass
+class Options:
+    parallax_px: float
+    max_parallax_px: float
+    convergence: str = "auto"
+    far_limit_pct: float = 1.2
+    eyes: str = "symmetric"          # symmetric | right
+    swap: bool = False
+    infill: str = "auto"             # auto | backend name
+    candidates: list[str] = field(default_factory=lambda: list(DEFAULT_CANDIDATES))
+    border: str = "crop"             # crop | fill
+    conditioning: DepthConditioning = field(default_factory=DepthConditioning)
+    device: str = "cpu"
+    debug: bool = False
+
+
+@dataclass
+class EyeResult:
+    name: str
+    rgb: np.ndarray
+    warped: Warped | None
+    hole: np.ndarray | None
+    chosen: str
+    reason: str
+    stats: dict
+    scores: dict
+    candidates: dict = field(default_factory=dict)   # name -> filled rgb (debug only)
+
+
+@dataclass
+class Result:
+    left: np.ndarray
+    right: np.ndarray
+    depth: np.ndarray            # conditioned depth (0..255 float)
+    eyes: list[EyeResult]
+    crop: tuple[int, int]
+    stats: dict
+
+
+class Models:
+    """Everything loaded once per process."""
+
+    def __init__(self, device: str):
+        self.device = device
+        self.scorer = Scorer(device)
+        self.available = available_backends()
+
+
+def spatialize_image(rgb: np.ndarray, depth8: np.ndarray, opt: Options, models: Models, log=print) -> Result:
+    t_all = time.time()
+    timings = {}
+    h, w = depth8.shape
+
+    t0 = time.time()
+    depth = condition_depth(depth8, rgb, opt.conditioning)
+    timings["condition"] = time.time() - t0
+
+    parallax_px = opt.parallax_px
+    clamped = False
+    if parallax_px > opt.max_parallax_px:
+        log(f"  warning: parallax {parallax_px:.1f}px exceeds --max-parallax {opt.max_parallax_px:.1f}px; clamping")
+        parallax_px, clamped = opt.max_parallax_px, True
+    zero, how = resolve_convergence(opt.convergence, depth, parallax_px, w, opt.far_limit_pct)
+    shift = shift_field(depth, parallax_px, zero)
+    log(f"  parallax {parallax_px:.1f}px ({100 * parallax_px / w:.2f}% of width), zero plane {zero:.1f} [{how}], "
+        f"shift {shift.min():+.1f}..{shift.max():+.1f}px")
+
+    if opt.eyes == "right":
+        eye_shifts = {"right": -shift}
+    else:
+        eye_shifts = {"left": shift * 0.5, "right": -shift * 0.5}
+
+    eyes: dict[str, EyeResult] = {}
+    border_l = border_r = 0
+    for name, s in eye_shifts.items():
+        t0 = time.time()
+        wp = forward_warp(rgb, depth, s, device="cpu")  # CPU beats MPS for this scatter-heavy step
+        timings[f"warp_{name}"] = time.time() - t0
+        bl, br = border_widths(wp.border)
+        border_l, border_r = max(border_l, bl), max(border_r, br)
+        hole = wp.hole | wp.border if opt.border == "fill" else wp.hole
+        geom = analyze(hole, wp.depth, wp.left_idx, wp.right_idx)
+        stats = hole_stats(geom, wp.rgb, (bl, br))
+        strip = bg_strip(geom, 8)
+        ctx = FillContext(geom=geom, shift=s, depth_src=depth, parallax_px=parallax_px, zero_plane=zero,
+                          device=opt.device, extra={"eye": name})
+
+        if opt.infill != "auto":
+            forced, cands, reason = opt.infill, [opt.infill], "forced"
+        else:
+            forced, cands, reason = plan(stats, opt.candidates, models.available)
+        scores: dict[str, dict] = {}
+        filled: dict[str, np.ndarray] = {}
+        for c in cands:
+            t1 = time.time()
+            be = get_backend(c)
+            try:
+                out = be.fill(wp.rgb, hole, wp.depth, rgb, ctx)
+            except Exception as e:  # a backend failure must not kill the image
+                log(f"  {name}: infill {c} failed: {e}")
+                continue
+            filled[c] = out
+            sc = {"fill_seconds": round(time.time() - t1, 3)}
+            if forced is None:
+                sc.update(models.scorer.score(out, rgb, s, wp.src_visible, geom, strip, be.whole_frame))
+            scores[c] = sc
+        if not filled:
+            filled["stretch"] = get_backend("stretch").fill(wp.rgb, hole, wp.depth, rgb, ctx)
+            scores["stretch"] = {"fill_seconds": 0.0}
+            forced, reason = "stretch", reason + "; all candidates failed"
+        if forced is not None and forced in filled:
+            chosen = forced
+        else:
+            chosen = min(scores, key=lambda k: scores[k].get("total", float("inf")))
+        log(f"  {name}: holes {stats.area_px}px (max width {stats.max_width}px, bg grad {stats.bg_grad:.1f}) -> "
+            f"{chosen} [{reason}]" + (f" scores: " + ", ".join(
+                f"{k}={v.get('total', 0):.3f}" for k, v in scores.items()) if forced is None else ""))
+        eyes[name] = EyeResult(name, filled[chosen], wp, hole, chosen, reason, stats.as_dict(), scores,
+                               filled if opt.debug else {})
+
+    if opt.eyes == "right":
+        left_rgb, right_rgb = rgb, eyes["right"].rgb
+    else:
+        left_rgb, right_rgb = eyes["left"].rgb, eyes["right"].rgb
+
+    crop = (0, 0)
+    if opt.border == "crop" and (border_l or border_r):
+        crop = (border_l, border_r)
+        left_rgb = left_rgb[:, border_l:w - border_r]
+        right_rgb = right_rgb[:, border_l:w - border_r]
+    if opt.swap:
+        left_rgb, right_rgb = right_rgb, left_rgb
+
+    timings["total"] = time.time() - t_all
+    stats = {
+        "width": w, "height": h,
+        "parallax_px": round(parallax_px, 2), "parallax_pct": round(100 * parallax_px / w, 3),
+        "parallax_clamped": clamped,
+        "convergence": {"mode": opt.convergence, "value": round(zero, 2), "how": how},
+        "shift_px": {"min": round(float(shift.min()), 2), "max": round(float(shift.max()), 2)},
+        "eyes_mode": opt.eyes, "swap": opt.swap, "border": opt.border, "crop_px": list(crop),
+        "infill": {n: {"chosen": e.chosen, "reason": e.reason, "holes": e.stats, "scores": e.scores,
+                       "cracks_filled": e.warped.cracks_filled} for n, e in eyes.items()},
+        "timings": {k: round(v, 3) for k, v in timings.items()},
+    }
+    return Result(left_rgb, right_rgb, depth, list(eyes.values()), crop, stats)
