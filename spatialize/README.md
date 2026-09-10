@@ -182,10 +182,11 @@ slower, which is why the cheap rules gate it.
 ## Performance
 
 12 MP on an M4 Pro: depth conditioning ~0.15 s, each eye's warp ~1-1.5 s (torch on CPU, which
-beats MPS for this scatter-heavy step), cheap fills 0.05-0.4 s, scoring ~0.3 s per candidate. With
-`--infill auto` a typical image where the cheap backends win finishes in 5-8 s plus JPEG encoding.
-`lama` adds 4-10 s per eye depending on how many 768 px tiles the hole clusters cover. `depthgen`
-itself, when it has to run, is separate (and its first run loads the Core ML model).
+beats MPS for this scatter-heavy step), cheap fills 0.05-0.4 s, scoring ~0.3-0.5 s per candidate.
+Measured with `--infill auto` (symmetric eyes, default candidates) on 12 MP inputs where the cheap
+backends win: 6.7-8.9 s in the pipeline, 8.4-10.8 s wall including the four JPEG encodes. When the
+holes are wide enough that `lama` is tried it adds 4-10 s per eye (20+ s total). `depthgen` itself,
+when it has to run, is separate (and its first run loads the Core ML model).
 
 ## Known failure modes
 
