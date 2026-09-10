@@ -8,7 +8,7 @@ import numpy as np
 from . import Backend, FillContext
 
 
-def bgpull_fill(rgb: np.ndarray, hole: np.ndarray, geom, feather: float = 1.5) -> np.ndarray:
+def bgpull_fill(rgb: np.ndarray, hole: np.ndarray, geom, feather: float = 1.5, guard: int = 0) -> np.ndarray:
     h, w = hole.shape
     if not hole.any():
         return rgb
@@ -17,7 +17,9 @@ def bgpull_fill(rgb: np.ndarray, hole: np.ndarray, geom, feather: float = 1.5) -
     bg = geom.bg_idx[ys, xs]
     dist = np.abs(xs - bg)                      # 1 = adjacent to the flank
     step = np.where(geom.bg_is_right[ys, xs], 1, -1)
-    src = bg + step * (dist - 1)                # mirror about the flank: x_bg, x_bg+1, ...
+    # mirror about the flank (optionally skipping `guard` px of it; the pipeline already regenerates the
+    # contaminated rim pixels next to an object edge, see Options.rim_px)
+    src = bg + step * (dist - 1 + guard)
     src = np.clip(src, 0, w - 1)
     # if the mirrored source itself runs into another hole or off the frame, fall back to the flank
     bad = hole[ys, src]

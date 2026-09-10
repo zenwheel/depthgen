@@ -87,6 +87,8 @@ def main(argv=None) -> int:
     g.add_argument("--infill", default="auto", help="auto | stretch | bgpull | opencv | opencv-ns | lama | iw3")
     g.add_argument("--candidates", default=",".join(["stretch", "bgpull", "opencv", "lama"]),
                    help="comma list of backends auto may try")
+    g.add_argument("--rim", type=int, default=2,
+                   help="regenerate this many background pixels along each hole's far edge too (object rim bleed)")
     g.add_argument("--border", choices=["crop", "fill"], default="crop",
                    help="frame edges: crop both eyes equally (default) or infill the uncovered strips")
     g = p.add_argument_group("output")
@@ -150,7 +152,7 @@ def main(argv=None) -> int:
             opt = Options(parallax_px=parse_parallax(a.parallax, photo.width),
                           max_parallax_px=parse_parallax(a.max_parallax, photo.width),
                           convergence=a.convergence, far_limit_pct=a.far_limit, eyes=a.eyes, swap=a.swap,
-                          infill=a.infill, candidates=candidates, border=a.border, conditioning=cond,
+                          infill=a.infill, candidates=candidates, border=a.border, rim_px=a.rim, conditioning=cond,
                           device=device, debug=bool(a.debug_dir))
             res = spatialize_image(photo.rgb, depth8, opt, models, log)
             chosen = "+".join(sorted({e.chosen for e in res.eyes}))

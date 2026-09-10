@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from . import WEIGHTS_DIR, Backend, FillContext
-from ..holes import clusters
+from ..holes import clusters, fg_band
 
 WEIGHTS = os.path.join(WEIGHTS_DIR, "big-lama.pt")
 
@@ -68,9 +68,10 @@ class LaMa(Backend):
         self._load(ctx.device)
         H, W = hole.shape
         out = warped.copy()
-        # the network also sees the boundary blend pixels as unknown
-        k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask_d = cv2.dilate(hole.astype(np.uint8), k5)
+        # A mask hugging an object edge makes LaMa *extend the object* into the hole. Disocclusions must
+        # be filled with background, so the occluding layer next to each hole (up to 256 px of it along
+        # the row) is masked as well and the network continues the background. Only the hole is pasted.
+        mask_d = (hole | fg_band(ctx.geom, depth, max_px=256, factor=1e9)).astype(np.uint8)
         for (x0, y0, x1, y1), _ in clusters(hole, margin=self.margin, join=24):
             for (tx0, ty0, tx1, ty1) in self._tiles(x0, y0, x1, y1, W, H):
                 m = mask_d[ty0:ty1, tx0:tx1]

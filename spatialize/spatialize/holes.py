@@ -77,3 +77,27 @@ def clusters(hole: np.ndarray, margin: int = 32, join: int = 16, max_clusters: i
         boxes.append(((x0, y0, x1, y1), hole_area))
     boxes.sort(key=lambda b: -b[1])
     return boxes[:max_clusters]
+
+
+def fg_band(geom: HoleGeometry, depth: np.ndarray, max_px: int = 48, factor: float = 2.0, tol: float = 6.0) -> np.ndarray:
+    """Mask of foreground pixels next to each hole on its near side, up to `factor` hole widths (capped at
+    `max_px`). Used to hide the occluder from an inpainter so it extends the background, not the object."""
+    h, w = geom.hole.shape
+    band = np.zeros((h, w), bool)
+    ys, xs = np.nonzero(geom.hole)
+    if len(ys) == 0:
+        return band
+    fg = np.where(geom.bg_is_right[ys, xs], geom.left_idx[ys, xs], geom.right_idx[ys, xs])
+    step = np.where(geom.bg_is_right[ys, xs], -1, 1)
+    reach = np.clip((factor * geom.width[ys, xs]).astype(int), 2, max_px)
+    limit = geom.bg_depth[ys, xs] + tol
+    for k in range(max_px):
+        sel = reach > k
+        if not sel.any():
+            break
+        xk = fg[sel] + k * step[sel]
+        ok = (xk >= 0) & (xk < w)
+        yy, xk = ys[sel][ok], xk[ok]
+        near = depth[yy, xk] > limit[sel][ok]
+        band[yy[near], xk[near]] = True
+    return band & ~geom.hole

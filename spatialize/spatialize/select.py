@@ -30,7 +30,7 @@ W_SEAM = 1.0 / 20.0      # seam excess in gray levels -> ~0..1
 W_LPIPS = 1.0
 CRACK_MAX_WIDTH = 2      # px: holes this narrow are always stretched
 SMOOTH_BG_GRAD = 4.0     # mean |grad| (gray levels/px) below which the background counts as smooth
-WIDE_HOLE = 8            # px: textured backgrounds with holes this wide want a learned inpainter
+WIDE_HOLE = 24           # px (p95 run width): only holes this wide are worth trying the learned inpainter on
 LPIPS_MAX_WINDOWS = 24
 LPIPS_PATCH = 128
 
