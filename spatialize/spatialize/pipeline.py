@@ -128,6 +128,8 @@ def spatialize_image(rgb: np.ndarray, depth8: np.ndarray, opt: Options, models: 
                 sc.update(models.scorer.score(out, rgb, s, wp.src_visible, geom, strip, be.whole_frame))
             scores[c] = sc
         if not filled:
+            if opt.infill != "auto":
+                raise RuntimeError(f"infill backend {opt.infill!r} failed for the {name} eye (see log)")
             filled["stretch"] = get_backend("stretch").fill(wp.rgb, hole, wp.depth, rgb, ctx)
             scores["stretch"] = {"fill_seconds": 0.0}
             forced, reason = "stretch", reason + "; all candidates failed"

@@ -52,13 +52,20 @@ class IW3(Backend):
                                 "user_data": {"source": "depthgen"}}, f)
             divergence = parallax_px / w * 100.0
             convergence = float(np.clip(zero_plane / 255.0, 0.0, 1.0))
-            cmd = [sys.executable, "-m", "iw3", "-i", os.path.join(tmp, "in"), "-o", os.path.join(tmp, "out"),
-                   "--full-sbs", "--divergence", f"{divergence:.3f}", "--convergence", f"{convergence:.3f}",
-                   "--method", self.method, "--yes"]
+            # full side-by-side is iw3's default output; --depth-model NULL keeps it from loading a depth
+            # network since the export config supplies the depth
+            cmd = [sys.executable, "-m", "iw3", "-i", os.path.join(tmp, "in", "iw3_export.yml"), "-o", os.path.join(tmp, "out"),
+                   "--depth-model", "NULL", "--format", "png", "--yes",
+                   "--divergence", f"{divergence:.3f}", "--convergence", f"{convergence:.3f}",
+                   "--method", self.method]
             env = dict(os.environ, PYTHONPATH=NUNIF_DIR + os.pathsep + os.environ.get("PYTHONPATH", ""))
             r = subprocess.run(cmd, cwd=NUNIF_DIR, capture_output=True, text=True, env=env)
             if r.returncode != 0:
-                raise RuntimeError(f"iw3 failed ({r.returncode}): {r.stderr.strip()[-400:]}")
+                # the default device is GPU 0 (MPS on a Mac); retry on the CPU before giving up
+                r = subprocess.run(cmd + ["--gpu", "-1"], cwd=NUNIF_DIR, capture_output=True, text=True, env=env)
+            if r.returncode != 0:
+                err = "\n".join(l for l in r.stderr.strip().splitlines() if "objc[" not in l)
+                raise RuntimeError(f"iw3 failed ({r.returncode}): {err[-500:]}")
             outs = sorted(glob.glob(os.path.join(tmp, "out", "**", "*.*"), recursive=True))
             outs = [p for p in outs if p.lower().endswith((".png", ".jpg", ".jpeg"))]
             if not outs:

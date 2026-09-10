@@ -44,7 +44,20 @@ if [ "$WITH_IW3" = 1 ]; then
     git clone -q --depth 1 https://github.com/nagadomi/nunif.git vendor/nunif
   fi
   echo "==> installing nunif requirements"
-  .venv/bin/pip install -q -r vendor/nunif/requirements.txt
+  # nunif pins av==15.0.0, which has no Python 3.14 wheel and does not compile against ffmpeg 9
+  # (AVFMT_ALLOW_FLUSH was removed). Current PyAV does, so install the rest of the list as-is and PyAV
+  # separately: built against the system (Homebrew) ffmpeg when pkg-config can see it (needs
+  # `brew install ffmpeg pkg-config`), otherwise the binary wheel with its bundled FFmpeg.
+  grep -v '^[[:space:]]*#' vendor/nunif/requirements.txt | grep -v '^[[:space:]]*$' | grep -v '^av' \
+    > .venv/nunif-requirements.txt
+  .venv/bin/pip install -q -r .venv/nunif-requirements.txt
+  if pkg-config --exists libavformat 2>/dev/null; then
+    echo "==> building PyAV against system ffmpeg $(pkg-config --modversion libavformat | cut -d. -f1) (libavformat)"
+    .venv/bin/pip install -q --no-binary av "av>=18"
+  else
+    echo "==> no system ffmpeg found by pkg-config; using the PyAV wheel with bundled FFmpeg"
+    .venv/bin/pip install -q --only-binary=:all: "av>=18"
+  fi
   echo "==> downloading iw3 models"
   (cd vendor/nunif && ../../.venv/bin/python -m iw3.download_models)
 fi

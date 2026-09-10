@@ -16,6 +16,12 @@ photo.jpg  +  photo-depth.png  ──►  photo_spatialized_left.jpg / _right.jp
 ./setup.sh --with-iw3   # optionally also install nunif/iw3 into the venv (reference backend, ~GBs)
 ```
 
+`--with-iw3` clones nunif into `vendor/`, installs its requirements and downloads its depth models
+(several GB, even though we feed iw3 our own depth). nunif pins PyAV 15, which has no Python 3.14
+wheel and does not compile against ffmpeg 9; `setup.sh` installs current PyAV instead, built against
+the system ffmpeg when `pkg-config` can find it (`brew install ffmpeg pkg-config`) and otherwise as
+the binary wheel with its bundled FFmpeg.
+
 Requires Python 3.11+ (tested on 3.14), macOS with Apple silicon for MPS (falls back to CPU),
 `depthgen` on `PATH` if a depth map has to be generated, `spatialPhotoTool` on `PATH` for `--heic`,
 and `exiftool` to tag the HEIC (the JPEGs are tagged without it).
