@@ -1,0 +1,8 @@
+#!/bin/sh
+# Wrapper so the tool can be called like `depthgen` from anywhere (e.g. the site build).
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
+if [ ! -x "$DIR/.venv/bin/python" ]; then
+  echo "spatialize: virtualenv missing; run $DIR/setup.sh" >&2
+  exit 2
+fi
+exec "$DIR/.venv/bin/python" "$DIR/spatialize.py" "$@"
